@@ -1,43 +1,75 @@
-name: Circle Scraper
+import path from 'path';
+import { test, expect } from '@playwright/test';
+import { config } from '../src/config';
+import { ensureDir, writeJson } from '../src/utils/file';
+import { writeCsv } from '../src/utils/csv';
+import {
+  findObjectArrays,
+  isJsonContentType,
+  looksLikeUsefulContentRecord,
+} from '../src/utils/network';
+import { normalizeRecord, type ExportRecord } from '../src/utils/normalize';
+import { TARGET_SECTIONS, openSection, scrollPageToLoadContent } from '../src/utils/navigation';
 
-on:
-  workflow_dispatch:
+test('export', async ({ page }) => {
+  ensureDir(config.exportDir);
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
+  const records: ExportRecord[] = [];
+  const seen = new Set<string>();
+  let currentSection = 'initial';
 
-    env:
-      CIRCLE_BASE_URL: https://community.abcdementia.org
-      SCRAPER_EMAIL: ${{ secrets.SCRAPER_EMAIL }}
-      SCRAPER_PASSWORD: ${{ secrets.SCRAPER_PASSWORD }}
-      CI: true
+  page.on('response', async (response) => {
+    try {
+      const contentType = response.headers()['content-type'] || '';
+      if (!isJsonContentType(contentType)) return;
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      const body = await response.json().catch(() => null);
+      if (body == null) return;
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      const arrays = findObjectArrays(body);
 
-      - name: Install dependencies
-        run: |
-          npm install
-          npx playwright install --with-deps
+      for (const arr of arrays) {
+        for (const item of arr) {
+          if (!looksLikeUsefulContentRecord(item)) continue;
 
-      - name: Run auth
-        run: npm run setup
+          const normalized = normalizeRecord(item, response.url(), currentSection);
 
-      - name: Run discovery
-        run: npm run discovery
+          const stableId =
+            normalized.id ||
+            normalized.url ||
+            normalized.slug ||
+            `${normalized.section}-${normalized.title}-${normalized.created_at}`;
 
-      - name: Run export
-        run: npm run export
+          if (!stableId || seen.has(stableId)) continue;
 
-      - name: Upload output artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: circle-export-output
-          path: output/
+          seen.add(stableId);
+          records.push(normalized);
+        }
+      }
+    } catch {
+      // ignore parse failures
+    }
+  });
+
+  await page.goto(config.baseUrl, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
+
+  for (const section of TARGET_SECTIONS) {
+    currentSection = section.key;
+
+    await openSection(page, section.label);
+    await scrollPageToLoadContent(page, 8);
+  }
+
+  writeJson(path.join(config.exportDir, 'resources.json'), records);
+  writeCsv(path.join(config.exportDir, 'resources.csv'), records);
+
+  const bySection = TARGET_SECTIONS.map((section) => ({
+    section: section.key,
+    count: records.filter((r) => r.section === section.key).length,
+  }));
+
+  writeJson(path.join(config.exportDir, 'counts-by-section.json'), bySection);
+
+  expect(records.length).toBeGreaterThan(0);
+});
