@@ -1,4 +1,4 @@
-import { test, expect, Page, Locator } from '@playwright/test';
+import { test, Page, Locator } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../src/config';
@@ -19,6 +19,45 @@ async function firstVisible(locators: Locator[]): Promise<Locator | null> {
   return null;
 }
 
+async function getVisibleTexts(locator: Locator, limit = 50): Promise<string[]> {
+  const results: string[] = [];
+  const count = await locator.count().catch(() => 0);
+
+  for (let i = 0; i < Math.min(count, limit); i++) {
+    const item = locator.nth(i);
+    const visible = await item.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const text = (await item.innerText().catch(() => '')).trim();
+    if (text) results.push(text.replace(/\s+/g, ' '));
+  }
+
+  return results;
+}
+
+async function getVisibleInputDetails(page: Page, limit = 50): Promise<string[]> {
+  const inputs = page.locator('input');
+  const results: string[] = [];
+  const count = await inputs.count().catch(() => 0);
+
+  for (let i = 0; i < Math.min(count, limit); i++) {
+    const input = inputs.nth(i);
+    const visible = await input.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const type = (await input.getAttribute('type').catch(() => '')) || '';
+    const name = (await input.getAttribute('name').catch(() => '')) || '';
+    const placeholder = (await input.getAttribute('placeholder').catch(() => '')) || '';
+    const autocomplete = (await input.getAttribute('autocomplete').catch(() => '')) || '';
+
+    results.push(
+      `type="${type}" name="${name}" placeholder="${placeholder}" autocomplete="${autocomplete}"`
+    );
+  }
+
+  return results;
+}
+
 async function dumpDebug(page: Page, name: string) {
   ensureDir('output/debug');
 
@@ -30,8 +69,31 @@ async function dumpDebug(page: Page, name: string) {
   const html = await page.content().catch(() => '');
   fs.writeFileSync(`output/debug/${name}.html`, html, 'utf-8');
 
-  const text = await page.locator('body').innerText().catch(() => '');
-  fs.writeFileSync(`output/debug/${name}.txt`, text, 'utf-8');
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  fs.writeFileSync(`output/debug/${name}.txt`, bodyText, 'utf-8');
+
+  const visibleButtons = await getVisibleTexts(page.getByRole('button'));
+  const visibleLinks = await getVisibleTexts(page.getByRole('link'));
+  const visibleInputs = await getVisibleInputDetails(page);
+
+  const report = [
+    `URL: ${page.url()}`,
+    '',
+    '=== VISIBLE BUTTONS ===',
+    ...(visibleButtons.length ? visibleButtons : ['(none found)']),
+    '',
+    '=== VISIBLE LINKS ===',
+    ...(visibleLinks.length ? visibleLinks : ['(none found)']),
+    '',
+    '=== VISIBLE INPUTS ===',
+    ...(visibleInputs.length ? visibleInputs : ['(none found)']),
+    '',
+    '=== PAGE TEXT PREVIEW ===',
+    bodyText.slice(0, 5000) || '(no body text found)',
+  ].join('\n');
+
+  fs.writeFileSync(`output/debug/${name}-report.txt`, report, 'utf-8');
+  console.log(report);
 }
 
 test('login and save session', async ({ page, context }) => {
@@ -39,9 +101,8 @@ test('login and save session', async ({ page, context }) => {
 
   await page.goto(config.baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
-  // Step 1: click "Sign in with an email"
   const signInWithEmailButton = await firstVisible([
     page.getByRole('button', { name: /sign in with an email/i }),
     page.getByRole('link', { name: /sign in with an email/i }),
@@ -50,14 +111,15 @@ test('login and save session', async ({ page, context }) => {
 
   if (!signInWithEmailButton) {
     await dumpDebug(page, 'auth-sign-in-with-email-not-found');
-    throw new Error(`Could not find "Sign in with an email" button. Current URL: ${page.url()}`);
+    throw new Error(
+      `Could not find "Sign in with an email" button. Current URL: ${page.url()}`
+    );
   }
 
   await signInWithEmailButton.click();
   await page.waitForLoadState('networkidle').catch(() => null);
   await page.waitForTimeout(2000);
 
-  // Step 2: fill email
   const emailInput = await firstVisible([
     page.locator('input[type="email"]'),
     page.locator('input[name="email"]'),
@@ -74,7 +136,6 @@ test('login and save session', async ({ page, context }) => {
 
   await emailInput.fill(config.email);
 
-  // Step 3: continue after email
   const continueAfterEmail = await firstVisible([
     page.getByRole('button', { name: /continue|next|sign in|log in/i }),
     page.getByRole('link', { name: /continue|next|sign in|log in/i }),
@@ -86,7 +147,6 @@ test('login and save session', async ({ page, context }) => {
     await page.waitForTimeout(2000);
   }
 
-  // Step 4: fill password
   const passwordInput = await firstVisible([
     page.locator('input[type="password"]'),
     page.locator('input[name="password"]'),
@@ -102,7 +162,6 @@ test('login and save session', async ({ page, context }) => {
 
   await passwordInput.fill(config.password);
 
-  // Step 5: submit password
   const submitButton = await firstVisible([
     page.getByRole('button', { name: /sign in|log in|continue|submit/i }),
     page.getByRole('link', { name: /sign in|log in|continue|submit/i }),
@@ -117,7 +176,6 @@ test('login and save session', async ({ page, context }) => {
   await page.waitForLoadState('networkidle').catch(() => null);
   await page.waitForTimeout(5000);
 
-  // Step 6: check for successful login
   const loggedInSignal = await firstVisible([
     page.getByText(/home/i),
     page.getByText(/courses/i),
