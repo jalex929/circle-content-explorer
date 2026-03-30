@@ -1,75 +1,49 @@
-import path from 'path';
-import { test, expect } from '@playwright/test';
-import { config } from '../src/config';
-import { ensureDir, writeJson } from '../src/utils/file';
-import { writeCsv } from '../src/utils/csv';
-import {
-  findObjectArrays,
-  isJsonContentType,
-  looksLikeUsefulContentRecord,
-} from '../src/utils/network';
-import { normalizeRecord, type ExportRecord } from '../src/utils/normalize';
-import { TARGET_SECTIONS, openSection, scrollPageToLoadContent } from '../src/utils/navigation';
+name: Circle Scraper
 
-test('export', async ({ page }) => {
-  ensureDir(config.exportDir);
+on:
+  workflow_dispatch:
 
-  const records: ExportRecord[] = [];
-  const seen = new Set<string>();
-  let currentSection = 'initial';
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
 
-  page.on('response', async (response) => {
-    try {
-      const contentType = response.headers()['content-type'] || '';
-      if (!isJsonContentType(contentType)) return;
+    env:
+      CIRCLE_BASE_URL: https://community.abcdementia.org
+      CIRCLE_EMAIL: ${{ secrets.CIRCLE_EMAIL }}
+      CIRCLE_PASSWORD: ${{ secrets.CIRCLE_PASSWORD }}
+      CI: true
 
-      const body = await response.json().catch(() => null);
-      if (body == null) return;
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      const arrays = findObjectArrays(body);
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      for (const arr of arrays) {
-        for (const item of arr) {
-          if (!looksLikeUsefulContentRecord(item)) continue;
+      - name: Install dependencies
+        run: |
+          npm install
+          npx playwright install --with-deps
 
-          const normalized = normalizeRecord(item, response.url(), currentSection);
+      - name: Debug env presence
+        run: |
+          echo "CIRCLE_BASE_URL set: ${{ env.CIRCLE_BASE_URL != '' }}"
+          echo "CIRCLE_EMAIL set: ${{ env.CIRCLE_EMAIL != '' }}"
+          echo "CIRCLE_PASSWORD set: ${{ env.CIRCLE_PASSWORD != '' }}"
 
-          const stableId =
-            normalized.id ||
-            normalized.url ||
-            normalized.slug ||
-            `${normalized.section}-${normalized.title}-${normalized.created_at}`;
+      - name: Run auth
+        run: npm run setup
 
-          if (!stableId || seen.has(stableId)) continue;
+      - name: Run discovery
+        run: npm run discovery
 
-          seen.add(stableId);
-          records.push(normalized);
-        }
-      }
-    } catch {
-      // ignore parse failures
-    }
-  });
+      - name: Run export
+        run: npm run export
 
-  await page.goto(config.baseUrl, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(2500);
-
-  for (const section of TARGET_SECTIONS) {
-    currentSection = section.key;
-
-    await openSection(page, section.label);
-    await scrollPageToLoadContent(page, 8);
-  }
-
-  writeJson(path.join(config.exportDir, 'resources.json'), records);
-  writeCsv(path.join(config.exportDir, 'resources.csv'), records);
-
-  const bySection = TARGET_SECTIONS.map((section) => ({
-    section: section.key,
-    count: records.filter((r) => r.section === section.key).length,
-  }));
-
-  writeJson(path.join(config.exportDir, 'counts-by-section.json'), bySection);
-
-  expect(records.length).toBeGreaterThan(0);
-});
+      - name: Upload output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: circle-export-output
+          path: output/
