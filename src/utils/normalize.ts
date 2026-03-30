@@ -1,4 +1,5 @@
 export type ExportRecord = {
+  section: string;
   id: string;
   title: string;
   slug: string;
@@ -23,18 +24,20 @@ function asString(value: unknown): string {
 
 export function normalizeRecord(
   item: Record<string, unknown>,
-  sourceUrl: string
+  sourceUrl: string,
+  section: string
 ): ExportRecord {
-  const author = (item.author ?? item.user ?? {}) as Record<string, unknown>;
+  const author = (item.author ?? item.user ?? item.member ?? {}) as Record<string, unknown>;
   const space = (item.space ?? item.group ?? item.community ?? {}) as Record<string, unknown>;
-  const attachments = (item.attachments ?? item.files ?? []) as unknown[];
+  const attachments = (item.attachments ?? item.files ?? item.file_attachments ?? []) as unknown[];
 
   return {
+    section,
     id: asString(item.id ?? item.post_id ?? item.uuid),
-    title: asString(item.title ?? item.name),
+    title: asString(item.title ?? item.name ?? item.headline),
     slug: asString(item.slug),
     url: asString(item.url ?? item.path),
-    body: asString(item.body ?? item.content ?? item.description),
+    body: asString(item.body ?? item.content ?? item.description ?? item.html),
     created_at: asString(item.created_at ?? item.createdAt),
     updated_at: asString(item.updated_at ?? item.updatedAt),
     published_at: asString(item.published_at ?? item.publishedAt),
