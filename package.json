@@ -1,0 +1,18 @@
+{
+  "name": "circle-content-exporter",
+  "version": "1.0.0",
+  "description": "Playwright-based authenticated exporter for Circle.so content migration",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "setup": "playwright test tests/auth.setup.ts --project=setup",
+    "discovery": "playwright test tests/discovery.spec.ts --project=chromium",
+    "export": "playwright test tests/export.spec.ts --project=chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0",
+    "@types/node": "^24.0.0",
+    "dotenv": "^17.0.0",
+    "typescript": "^5.8.0"
+  }
+}
