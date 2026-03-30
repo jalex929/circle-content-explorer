@@ -7,6 +7,19 @@ function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+const redirectLog: Array<{ status: number; url: string; location: string }> = [];
+
+page.on('response', async (response) => {
+  const status = response.status();
+  if ([301, 302, 303, 307, 308].includes(status)) {
+    redirectLog.push({
+      status,
+      url: response.url(),
+      location: response.headers()['location'] || '',
+    });
+  }
+});
+
 async function firstVisible(locators: Locator[]): Promise<Locator | null> {
   for (const locator of locators) {
     const count = await locator.count().catch(() => 0);
