@@ -3,14 +3,20 @@ import { test, expect } from '@playwright/test';
 import { config } from '../src/config';
 import { ensureDir, writeJson } from '../src/utils/file';
 import { writeCsv } from '../src/utils/csv';
-import { findObjectArrays, isJsonContentType } from '../src/utils/network';
+import {
+  findObjectArrays,
+  isJsonContentType,
+  looksLikeUsefulContentRecord,
+} from '../src/utils/network';
 import { normalizeRecord, type ExportRecord } from '../src/utils/normalize';
+import { TARGET_SECTIONS, openSection, scrollPageToLoadContent } from '../src/utils/navigation';
 
 test('export', async ({ page }) => {
   ensureDir(config.exportDir);
 
   const records: ExportRecord[] = [];
   const seen = new Set<string>();
+  let currentSection = 'initial';
 
   page.on('response', async (response) => {
     try {
@@ -24,13 +30,15 @@ test('export', async ({ page }) => {
 
       for (const arr of arrays) {
         for (const item of arr) {
-          const normalized = normalizeRecord(item, response.url());
+          if (!looksLikeUsefulContentRecord(item)) continue;
+
+          const normalized = normalizeRecord(item, response.url(), currentSection);
 
           const stableId =
             normalized.id ||
             normalized.url ||
             normalized.slug ||
-            `${normalized.title}-${normalized.created_at}`;
+            `${normalized.section}-${normalized.title}-${normalized.created_at}`;
 
           if (!stableId || seen.has(stableId)) continue;
 
@@ -43,27 +51,25 @@ test('export', async ({ page }) => {
     }
   });
 
-  const candidatePaths = [
-    '/admin',
-    '/admin/spaces',
-    '/admin/posts',
-    '/admin/content',
-    '/admin/courses',
-  ];
+  await page.goto(config.baseUrl, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
 
-  for (const candidate of candidatePaths) {
-    const url = `${config.baseUrl}${candidate}`;
-    await page.goto(url, { waitUntil: 'networkidle' }).catch(() => null);
-    await page.waitForTimeout(2500);
+  for (const section of TARGET_SECTIONS) {
+    currentSection = section.key;
 
-    for (let i = 0; i < 4; i++) {
-      await page.mouse.wheel(0, 2500);
-      await page.waitForTimeout(1000);
-    }
+    await openSection(page, section.label);
+    await scrollPageToLoadContent(page, 8);
   }
 
   writeJson(path.join(config.exportDir, 'resources.json'), records);
   writeCsv(path.join(config.exportDir, 'resources.csv'), records);
+
+  const bySection = TARGET_SECTIONS.map((section) => ({
+    section: section.key,
+    count: records.filter((r) => r.section === section.key).length,
+  }));
+
+  writeJson(path.join(config.exportDir, 'counts-by-section.json'), bySection);
 
   expect(records.length).toBeGreaterThan(0);
 });
