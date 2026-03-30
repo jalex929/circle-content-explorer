@@ -1,0 +1,43 @@
+name: Circle Scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    env:
+      CIRCLE_BASE_URL: https://community.abcdementia.org
+      SCRAPER_EMAIL: ${{ secrets.SCRAPER_EMAIL }}
+      SCRAPER_PASSWORD: ${{ secrets.SCRAPER_PASSWORD }}
+      CI: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          npm install
+          npx playwright install --with-deps
+
+      - name: Run auth
+        run: npm run setup
+
+      - name: Run discovery
+        run: npm run discovery
+
+      - name: Run export
+        run: npm run export
+
+      - name: Upload output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: circle-export-output
+          path: output/
