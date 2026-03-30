@@ -1,69 +1,55 @@
-import { test, expect } from '@playwright/test';
-import path from 'path';
-import { config } from '../src/config';
-import { ensureDir, writeJson, writeText } from '../src/utils/file';
-import {
-  collectKeys,
-  isJsonContentType,
-  type CapturedJsonResponse,
-} from '../src/utils/network';
+export type ExportRecord = {
+  section: string;
+  id: string;
+  title: string;
+  slug: string;
+  url: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  published_at: string;
+  author_name: string;
+  author_id: string;
+  space_name: string;
+  space_id: string;
+  cover_image_url: string;
+  attachment_urls: string;
+  raw_source_url: string;
+  raw_json: string;
+};
 
-test('discovery', async ({ page }) => {
-  ensureDir(config.discoveryDir);
+function asString(value: unknown): string {
+  return value == null ? '' : String(value);
+}
 
-  const captured: CapturedJsonResponse[] = [];
+export function normalizeRecord(
+  item: Record<string, unknown>,
+  sourceUrl: string,
+  section: string
+): ExportRecord {
+  const author = (item.author ?? item.user ?? item.member ?? {}) as Record<string, unknown>;
+  const space = (item.space ?? item.group ?? item.community ?? {}) as Record<string, unknown>;
+  const attachments = (item.attachments ?? item.files ?? item.file_attachments ?? []) as unknown[];
 
-  page.on('response', async (response) => {
-    try {
-      const contentType = response.headers()['content-type'] || '';
-      if (!isJsonContentType(contentType)) return;
-
-      const body = await response.json().catch(() => null);
-      if (body == null) return;
-
-      captured.push({
-        url: response.url(),
-        status: response.status(),
-        contentType,
-        body,
-      });
-    } catch {
-      // ignore parse failures
-    }
-  });
-
-  const candidatePaths = [
-    '/',
-    '/admin',
-    '/admin/spaces',
-    '/admin/posts',
-    '/admin/content',
-    '/admin/courses',
-  ];
-
-  for (const candidate of candidatePaths) {
-    const url = `${config.baseUrl}${candidate}`;
-    await page.goto(url, { waitUntil: 'networkidle' }).catch(() => null);
-    await page.waitForTimeout(2500);
-
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    writeText(
-      path.join(config.discoveryDir, `${candidate.replace(/[\/]/g, '_') || 'root'}.txt`),
-      bodyText
-    );
-  }
-
-  writeJson(path.join(config.discoveryDir, 'captured-json.json'), captured);
-
-  const discovered = new Set<string>();
-  for (const item of captured) {
-    collectKeys(item.body, discovered);
-  }
-
-  writeJson(
-    path.join(config.discoveryDir, 'discovered-fields.json'),
-    Array.from(discovered).sort()
-  );
-
-  expect(captured.length).toBeGreaterThan(0);
-});
+  return {
+    section,
+    id: asString(item.id ?? item.post_id ?? item.uuid),
+    title: asString(item.title ?? item.name ?? item.headline),
+    slug: asString(item.slug),
+    url: asString(item.url ?? item.path),
+    body: asString(item.body ?? item.content ?? item.description ?? item.html),
+    created_at: asString(item.created_at ?? item.createdAt),
+    updated_at: asString(item.updated_at ?? item.updatedAt),
+    published_at: asString(item.published_at ?? item.publishedAt),
+    author_name: asString(author.name),
+    author_id: asString(author.id),
+    space_name: asString(space.name),
+    space_id: asString(space.id),
+    cover_image_url: asString(
+      item.cover_image_url ?? item.image_url ?? item.thumbnail_url ?? item.coverImageUrl
+    ),
+    attachment_urls: JSON.stringify(attachments),
+    raw_source_url: sourceUrl,
+    raw_json: JSON.stringify(item),
+  };
+}
