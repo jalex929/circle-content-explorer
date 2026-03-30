@@ -42,8 +42,12 @@ jobs:
       - name: Run export
         run: npm run export
 
-      - name: Upload output artifact
+      - name: Upload scraper output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: circle-export-output
-          path: output/
+          path: |
+            output/
+            test-results/
+            playwright-report/
