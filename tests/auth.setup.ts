@@ -7,19 +7,6 @@ function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
-const redirectLog: Array<{ status: number; url: string; location: string }> = [];
-
-page.on('response', async (response) => {
-  const status = response.status();
-  if ([301, 302, 303, 307, 308].includes(status)) {
-    redirectLog.push({
-      status,
-      url: response.url(),
-      location: response.headers()['location'] || '',
-    });
-  }
-});
-
 async function firstVisible(locators: Locator[]): Promise<Locator | null> {
   for (const locator of locators) {
     const count = await locator.count().catch(() => 0);
@@ -71,7 +58,11 @@ async function getVisibleInputDetails(page: Page, limit = 50): Promise<string[]>
   return results;
 }
 
-async function dumpDebug(page: Page, name: string) {
+async function dumpDebug(
+  page: Page,
+  name: string,
+  redirectLog: Array<{ status: number; url: string; location: string }>
+) {
   ensureDir('output/debug');
 
   await page.screenshot({
@@ -88,9 +79,17 @@ async function dumpDebug(page: Page, name: string) {
   const visibleButtons = await getVisibleTexts(page.getByRole('button'));
   const visibleLinks = await getVisibleTexts(page.getByRole('link'));
   const visibleInputs = await getVisibleInputDetails(page);
+  const title = await page.title().catch(() => '');
 
   const report = [
-    `URL: ${page.url()}`,
+    `Initial base URL: ${config.baseUrl}`,
+    `Final page URL: ${page.url()}`,
+    `Page title: ${title}`,
+    '',
+    '=== REDIRECTS SEEN ===',
+    ...(redirectLog.length
+      ? redirectLog.map(r => `${r.status} ${r.url} -> ${r.location}`)
+      : ['(none captured)']),
     '',
     '=== VISIBLE BUTTONS ===',
     ...(visibleButtons.length ? visibleButtons : ['(none found)']),
@@ -117,14 +116,29 @@ async function waitForSettled(page: Page, ms = 2500) {
 test('login and save session', async ({ page, context }) => {
   ensureDir(path.dirname(config.authFile));
 
+  // Track redirects
+  const redirectLog: Array<{ status: number; url: string; location: string }> = [];
+
+  page.on('response', async (response) => {
+    const status = response.status();
+    if ([301, 302, 303, 307, 308].includes(status)) {
+      redirectLog.push({
+        status,
+        url: response.url(),
+        location: response.headers()['location'] || '',
+      });
+    }
+  });
+
+  // Step 1: open site
   await page.goto(config.baseUrl, { waitUntil: 'domcontentloaded' });
   await waitForSettled(page, 3000);
 
-  // Branch A: already logged in
+  // Step 2: already logged in?
   const alreadyLoggedIn = await firstVisible([
     page.getByText(/open resource library/i),
     page.getByText(/microlesson library/i),
-    page.getByText(/family caregiver kickstart/i),
+    page.getByText(/family caregiver/i),
     page.getByText(/behavior translation/i),
   ]);
 
@@ -133,7 +147,7 @@ test('login and save session', async ({ page, context }) => {
     return;
   }
 
-  // Branch B: public page with "Log in"
+  // Step 3: click "Log in" if present
   const loginButton = await firstVisible([
     page.getByRole('button', { name: /^log in$/i }),
     page.getByRole('link', { name: /^log in$/i }),
@@ -145,7 +159,7 @@ test('login and save session', async ({ page, context }) => {
     await waitForSettled(page, 2500);
   }
 
-  // Branch C: auth page with "Sign in with an email"
+  // Step 4: click "Sign in with an email"
   const signInWithEmailButton = await firstVisible([
     page.getByRole('button', { name: /sign in with an email/i }),
     page.getByRole('link', { name: /sign in with an email/i }),
@@ -153,80 +167,73 @@ test('login and save session', async ({ page, context }) => {
   ]);
 
   if (!signInWithEmailButton) {
-    await dumpDebug(page, 'auth-sign-in-with-email-not-found');
+    await dumpDebug(page, 'auth-sign-in-with-email-not-found', redirectLog);
     throw new Error(
-      `Could not find "Sign in with an email" button after loading page/login step. Current URL: ${page.url()}`
+      `Could not find "Sign in with an email" button. Current URL: ${page.url()}`
     );
   }
 
-  await signInWithEmailButton.click().catch(() => null);
+  await signInWithEmailButton.click();
   await waitForSettled(page, 2000);
 
+  // Step 5: email input
   const emailInput = await firstVisible([
     page.locator('input[type="email"]'),
     page.locator('input[name="email"]'),
     page.locator('input[autocomplete="email"]'),
-    page.getByLabel(/email/i),
     page.getByPlaceholder(/email/i),
-    page.getByRole('textbox', { name: /email/i }),
   ]);
 
   if (!emailInput) {
-    await dumpDebug(page, 'auth-email-not-found');
-    throw new Error(`Could not find email input. Current URL: ${page.url()}`);
+    await dumpDebug(page, 'auth-email-not-found', redirectLog);
+    throw new Error(`Could not find email input`);
   }
 
   await emailInput.fill(config.email);
 
-  const continueAfterEmail = await firstVisible([
-    page.getByRole('button', { name: /continue|next|sign in|log in/i }),
-    page.getByRole('link', { name: /continue|next|sign in|log in/i }),
+  const continueBtn = await firstVisible([
+    page.getByRole('button', { name: /continue|next|sign in/i }),
   ]);
 
-  if (continueAfterEmail) {
-    await continueAfterEmail.click().catch(() => null);
+  if (continueBtn) {
+    await continueBtn.click().catch(() => null);
     await waitForSettled(page, 2000);
   }
 
+  // Step 6: password
   const passwordInput = await firstVisible([
     page.locator('input[type="password"]'),
     page.locator('input[name="password"]'),
-    page.locator('input[autocomplete="current-password"]'),
-    page.getByLabel(/password/i),
-    page.getByPlaceholder(/password/i),
   ]);
 
   if (!passwordInput) {
-    await dumpDebug(page, 'auth-password-not-found');
-    throw new Error(`Could not find password input. Current URL: ${page.url()}`);
+    await dumpDebug(page, 'auth-password-not-found', redirectLog);
+    throw new Error(`Could not find password input`);
   }
 
   await passwordInput.fill(config.password);
 
-  const submitButton = await firstVisible([
-    page.getByRole('button', { name: /sign in|log in|continue|submit/i }),
-    page.getByRole('link', { name: /sign in|log in|continue|submit/i }),
+  const submitBtn = await firstVisible([
+    page.getByRole('button', { name: /sign in|log in|continue/i }),
   ]);
 
-  if (!submitButton) {
-    await dumpDebug(page, 'auth-submit-not-found');
-    throw new Error(`Could not find submit button on password step. Current URL: ${page.url()}`);
+  if (!submitBtn) {
+    await dumpDebug(page, 'auth-submit-not-found', redirectLog);
+    throw new Error(`Could not find submit button`);
   }
 
-  await submitButton.click().catch(() => null);
+  await submitBtn.click();
   await waitForSettled(page, 5000);
 
-  const loggedInSignal = await firstVisible([
-    page.getByText(/open resource library/i),
-    page.getByText(/microlesson library/i),
-    page.getByText(/family caregiver kickstart/i),
-    page.getByText(/behavior translation/i),
+  // Step 7: confirm login
+  const success = await firstVisible([
     page.getByText(/feed/i),
+    page.getByText(/open resource library/i),
   ]);
 
-  if (!loggedInSignal) {
-    await dumpDebug(page, 'auth-login-failed');
-    throw new Error(`Login did not appear to complete. Current URL: ${page.url()}`);
+  if (!success) {
+    await dumpDebug(page, 'auth-login-failed', redirectLog);
+    throw new Error(`Login did not complete`);
   }
 
   await context.storageState({ path: config.authFile });
