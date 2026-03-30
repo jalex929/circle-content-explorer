@@ -96,13 +96,43 @@ async function dumpDebug(page: Page, name: string) {
   console.log(report);
 }
 
+async function waitForSettled(page: Page, ms = 2500) {
+  await page.waitForLoadState('networkidle').catch(() => null);
+  await page.waitForTimeout(ms);
+}
+
 test('login and save session', async ({ page, context }) => {
   ensureDir(path.dirname(config.authFile));
 
   await page.goto(config.baseUrl, { waitUntil: 'domcontentloaded' });
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(3000);
+  await waitForSettled(page, 3000);
 
+  // Branch A: already logged in
+  const alreadyLoggedIn = await firstVisible([
+    page.getByText(/open resource library/i),
+    page.getByText(/microlesson library/i),
+    page.getByText(/family caregiver kickstart/i),
+    page.getByText(/behavior translation/i),
+  ]);
+
+  if (alreadyLoggedIn) {
+    await context.storageState({ path: config.authFile });
+    return;
+  }
+
+  // Branch B: public page with "Log in"
+  const loginButton = await firstVisible([
+    page.getByRole('button', { name: /^log in$/i }),
+    page.getByRole('link', { name: /^log in$/i }),
+    page.getByText(/^log in$/i),
+  ]);
+
+  if (loginButton) {
+    await loginButton.click().catch(() => null);
+    await waitForSettled(page, 2500);
+  }
+
+  // Branch C: auth page with "Sign in with an email"
   const signInWithEmailButton = await firstVisible([
     page.getByRole('button', { name: /sign in with an email/i }),
     page.getByRole('link', { name: /sign in with an email/i }),
@@ -112,13 +142,12 @@ test('login and save session', async ({ page, context }) => {
   if (!signInWithEmailButton) {
     await dumpDebug(page, 'auth-sign-in-with-email-not-found');
     throw new Error(
-      `Could not find "Sign in with an email" button. Current URL: ${page.url()}`
+      `Could not find "Sign in with an email" button after loading page/login step. Current URL: ${page.url()}`
     );
   }
 
-  await signInWithEmailButton.click();
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(2000);
+  await signInWithEmailButton.click().catch(() => null);
+  await waitForSettled(page, 2000);
 
   const emailInput = await firstVisible([
     page.locator('input[type="email"]'),
@@ -143,8 +172,7 @@ test('login and save session', async ({ page, context }) => {
 
   if (continueAfterEmail) {
     await continueAfterEmail.click().catch(() => null);
-    await page.waitForLoadState('networkidle').catch(() => null);
-    await page.waitForTimeout(2000);
+    await waitForSettled(page, 2000);
   }
 
   const passwordInput = await firstVisible([
@@ -173,16 +201,14 @@ test('login and save session', async ({ page, context }) => {
   }
 
   await submitButton.click().catch(() => null);
-  await page.waitForLoadState('networkidle').catch(() => null);
-  await page.waitForTimeout(5000);
+  await waitForSettled(page, 5000);
 
   const loggedInSignal = await firstVisible([
-    page.getByText(/home/i),
-    page.getByText(/courses/i),
-    page.getByText(/events/i),
-    page.getByText(/members/i),
     page.getByText(/open resource library/i),
     page.getByText(/microlesson library/i),
+    page.getByText(/family caregiver kickstart/i),
+    page.getByText(/behavior translation/i),
+    page.getByText(/feed/i),
   ]);
 
   if (!loggedInSignal) {
