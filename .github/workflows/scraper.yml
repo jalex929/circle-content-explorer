@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CIRCLE_BASE_URL: https://community.abcdementia.org
+      CIRCLE_BASE_URL: https://abcdementia.circle.so
       CIRCLE_EMAIL: ${{ secrets.CIRCLE_EMAIL }}
       CIRCLE_PASSWORD: ${{ secrets.CIRCLE_PASSWORD }}
       CI: true
